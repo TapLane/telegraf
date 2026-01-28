@@ -128,7 +128,7 @@ func (s *Snmp) Gather(acc telegraf.Accumulator) error {
 			}
 			topTags := make(map[string]string)
 
-			if err := s.gatherTable(acc, gs, tTop, topTags, false); err != nil {
+			if err := s.gatherTable(acc, gs, t, topTags, false); err != nil {
 				// If it's a v3 session/auth mismatch, reset and stop early to avoid extra walks.
 				if s.isSnmpV3SessionInvalid(err) {
 					s.resetConnection(i, agent, gs, err)
