@@ -1,25 +1,40 @@
-# syntax=docker/dockerfile:1
+# Build stage
+FROM golang:1.25.3-alpine AS builder
 
-FROM golang:1.25-alpine AS build
-RUN apk add --no-cache git ca-certificates make bash
-WORKDIR /src
+# Install build dependencies
+RUN apk add --no-cache git make bash
 
+# Set working directory
+WORKDIR /go/src/github.com/influxdata/telegraf
+
+# Copy go mod files first for better caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy the entire source code
 COPY . .
 
-ARG VERSION="dev"
-ARG COMMIT="unknown"
-ARG BRANCH="unknown"
+# Remove problematic symlinks
+RUN find . -type l -delete
 
-# Build via Makefile (sets correct ldflags)
-ENV CGO_ENABLED=0 GOTOOLCHAIN=local
-RUN make go-install
+# Build telegraf
+RUN make build
 
-FROM alpine:3.20
-RUN apk add --no-cache ca-certificates tzdata \
-  && adduser -D -H -s /sbin/nologin telegraf
+# Runtime stage
+FROM alpine:latest
 
-COPY --from=build /go/bin/telegraf /usr/bin/telegraf
+# Install runtime dependencies including SNMP tools
+RUN apk add --no-cache ca-certificates tzdata net-snmp-tools
 
-# Most Telegraf images run telegraf directly; config is mounted at runtime
-USER telegraf
-ENTRYPOINT ["telegraf"]
+# Copy the binary from builder
+COPY --from=builder /go/src/github.com/influxdata/telegraf/telegraf /usr/bin/telegraf
+
+# Create config directory
+RUN mkdir -p /etc/telegraf /etc/telegraf/telegraf.d
+
+# Expose default port (if using http_listener or similar)
+EXPOSE 8125/udp 8092/udp 8094 8186
+
+# Set telegraf as entrypoint
+ENTRYPOINT ["/usr/bin/telegraf"]
+CMD ["--config", "/etc/telegraf/telegraf.conf", "--config-directory", "/etc/telegraf/telegraf.d"]

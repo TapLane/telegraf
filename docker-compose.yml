@@ -1,0 +1,61 @@
+services:
+  telegraf:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: telegraf-dev
+    hostname: telegraf-dev
+    restart: unless-stopped
+    volumes:
+      # Mount your config file
+      - ./telegraf.conf:/etc/telegraf/telegraf.conf:ro
+      # Mount additional config directory (read-write to avoid permission issues)
+      - ./telegraf.d:/etc/telegraf/telegraf.d:rw
+      # Mount host directories for system metrics
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /etc:/host/etc:ro
+      # Mount docker socket if you want to monitor docker
+      # - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Mount any additional directories you need
+      # - ./data:/data
+    ports:
+      # StatsD
+      - "8125:8125/udp"
+      # Influx
+      - "8092:8092/udp"
+      # HTTP Listener
+      - "8186:8186"
+    environment:
+      - HOST_PROC=/host/proc
+      - HOST_SYS=/host/sys
+      - HOST_ETC=/host/etc
+    networks:
+      - default
+      - edgepulse
+
+  # Optional: InfluxDB for testing output
+  influxdb:
+    image: influxdb:2.7-alpine
+    container_name: influxdb-dev
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+      - influxdb-config:/etc/influxdb2
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=adminpassword
+      - DOCKER_INFLUXDB_INIT_ORG=myorg
+      - DOCKER_INFLUXDB_INIT_BUCKET=mybucket
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=mytoken123
+
+volumes:
+  influxdb-data:
+  influxdb-config:
+
+networks:
+  edgepulse:
+    external: true
