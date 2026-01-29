@@ -1,0 +1,40 @@
+name: Build & Push Telegraf (master)
+
+on:
+  push:
+    branches: ["master"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute TAG
+        id: version
+        shell: bash
+        run: |
+          TAG="0.0.${GITHUB_RUN_NUMBER}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build & Push
+        shell: bash
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          IMAGE="${{ vars.DOCKER_URL }}/${{ vars.REPO_NAME }}:$TAG"
+          LATEST="${{ vars.DOCKER_URL }}/${{ vars.REPO_NAME }}:latest"
+
+          docker build -t "$IMAGE" -t "$LATEST" .
+          docker push "$IMAGE"
+          docker push "$LATEST"
