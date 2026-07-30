@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/binary"
 	"io"
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/require"
 
 	"github.com/influxdata/telegraf"
@@ -23,7 +24,7 @@ type mockClient struct {
 	ContainerLogsF    func() (io.ReadCloser, error)
 }
 
-func (c *mockClient) ContainerList(context.Context, container.ListOptions) ([]container.Summary, error) {
+func (c *mockClient) ContainerList(context.Context, client.ContainerListOptions) ([]container.Summary, error) {
 	return c.ContainerListF()
 }
 
@@ -31,7 +32,7 @@ func (c *mockClient) ContainerInspect(context.Context, string) (container.Inspec
 	return c.ContainerInspectF()
 }
 
-func (c *mockClient) ContainerLogs(context.Context, string, container.LogsOptions) (io.ReadCloser, error) {
+func (c *mockClient) ContainerLogs(context.Context, string, client.ContainerLogsOptions) (io.ReadCloser, error) {
 	return c.ContainerLogsF()
 }
 
@@ -126,10 +127,19 @@ func Test(t *testing.T) {
 					}, nil
 				},
 				ContainerLogsF: func() (io.ReadCloser, error) {
+					content := []byte("2020-04-28T18:42:16.432691200Z hello from stdout")
+
+					// Emulate a multiplexed writer
 					var buf bytes.Buffer
-					w := stdcopy.NewStdWriter(&buf, stdcopy.Stdout)
-					_, err := w.Write([]byte("2020-04-28T18:42:16.432691200Z hello from stdout"))
-					return &response{Reader: &buf}, err
+					header := [8]byte{0: 1}
+					binary.BigEndian.PutUint32(header[4:], uint32(len(content)))
+					if _, err := buf.Write(header[:]); err != nil {
+						return nil, err
+					}
+					if _, err := buf.Write(content); err != nil {
+						return nil, err
+					}
+					return &response{Reader: &buf}, nil
 				},
 			},
 			expected: []telegraf.Metric{

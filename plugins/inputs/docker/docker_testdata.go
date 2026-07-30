@@ -3,16 +3,17 @@ package docker
 import (
 	"fmt"
 	"io"
+	"net/netip"
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/registry"
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/api/types/system"
-	"github.com/docker/docker/api/types/volume"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/api/types/registry"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/api/types/volume"
+	"github.com/moby/moby/client"
 )
 
 var info = system.Info{
@@ -44,7 +45,7 @@ var info = system.Info{
 				Official: true,
 				Secure:   true,
 			},
-		}, InsecureRegistryCIDRs: []*registry.NetIPNet{{IP: []byte{127, 0, 0, 0}, Mask: []byte{255, 0, 0, 0}}}, Mirrors: make([]string, 0)},
+		}, InsecureRegistryCIDRs: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}, Mirrors: make([]string, 0)},
 	OperatingSystem: "Linux Mint LMDE (containerized)",
 	HTTPSProxy:      "",
 	Labels:          make([]string, 0),
@@ -87,7 +88,7 @@ var containerList = []container.Summary{
 		Command: "/etcd -name etcd0 -advertise-client-urls http://localhost:2379 -listen-client-urls http://0.0.0.0:2379",
 		Created: 1455941930,
 		Status:  "Up 4 hours",
-		Ports: []container.Port{
+		Ports: []container.PortSummary{
 			{
 				PrivatePort: 7001,
 				PublicPort:  0,
@@ -107,7 +108,7 @@ var containerList = []container.Summary{
 				PrivatePort: 2379,
 				PublicPort:  2379,
 				Type:        "tcp",
-				IP:          "0.0.0.0",
+				IP:          netip.MustParseAddr("0.0.0.0"),
 			},
 		},
 		Labels: map[string]string{
@@ -124,7 +125,7 @@ var containerList = []container.Summary{
 		Command: "/etcd -name etcd2 -advertise-client-urls http://localhost:2379 -listen-client-urls http://0.0.0.0:2379",
 		Created: 1455941933,
 		Status:  "Up 4 hours",
-		Ports: []container.Port{
+		Ports: []container.PortSummary{
 			{
 				PrivatePort: 7002,
 				PublicPort:  0,
@@ -144,7 +145,7 @@ var containerList = []container.Summary{
 				PrivatePort: 2382,
 				PublicPort:  2382,
 				Type:        "tcp",
-				IP:          "0.0.0.0",
+				IP:          netip.MustParseAddr("0.0.0.0"),
 			},
 		},
 		Labels: map[string]string{
@@ -266,8 +267,8 @@ var nodeList = []swarm.Node{
 	},
 }
 
-func containerStats(s string) container.StatsResponseReader {
-	var stat container.StatsResponseReader
+func containerStats(s string) StatsResponseReader {
+	var stat StatsResponseReader
 	var name string
 	switch s {
 	case "e2173b9478a6ae55e237d4d74f8bbb753f0817192b5081334dc78476296b7dfb":
@@ -495,8 +496,8 @@ func testStats() *container.StatsResponse {
 	return stats
 }
 
-func containerStatsWindows() container.StatsResponseReader {
-	var stat container.StatsResponseReader
+func containerStatsWindows() StatsResponseReader {
+	var stat StatsResponseReader
 	jsonStat := `
 {
 	"read":"2017-01-11T08:32:46.2413794Z",
@@ -552,33 +553,37 @@ func containerInspect() container.InspectResponse {
 				"PATH=/bin:/sbin",
 			},
 		},
-		ContainerJSONBase: &container.ContainerJSONBase{
-			State: &container.State{
-				Health: &container.Health{
-					FailingStreak: 1,
-					Status:        "Unhealthy",
-				},
-				Status:     "running",
-				OOMKilled:  false,
-				Pid:        1234,
-				ExitCode:   0,
-				StartedAt:  "2018-06-14T05:48:53.266176036Z",
-				FinishedAt: "0001-01-01T00:00:00Z",
+		State: &container.State{
+			Health: &container.Health{
+				FailingStreak: 1,
+				Status:        "Unhealthy",
 			},
+			Status:     container.StateRunning,
+			OOMKilled:  false,
+			Pid:        1234,
+			ExitCode:   0,
+			StartedAt:  "2018-06-14T05:48:53.266176036Z",
+			FinishedAt: "0001-01-01T00:00:00Z",
 		},
 	}
 }
 
-var diskUsage = types.DiskUsage{
-	LayersSize: 1e10,
-	Containers: []*container.Summary{
-		{Names: []string{"/some_container"}, Image: "some_image:1.0.0-alpine", SizeRw: 0, SizeRootFs: 123456789},
+var diskUsage = client.DiskUsageResult{
+	Containers: client.ContainersDiskUsage{
+		Items: []container.Summary{
+			{Names: []string{"/some_container"}, Image: "some_image:1.0.0-alpine", SizeRw: 0, SizeRootFs: 123456789},
+		},
 	},
-	Images: []*image.Summary{
-		{ID: "sha256:some_imageid", RepoTags: []string{"some_image_tag:1.0.0-alpine"}, Size: 123456789, SharedSize: 0},
-		{ID: "sha256:7f4a1cc74046ce48cd918693cd6bf4b2683f4ce0d7be3f7148a21df9f06f5b5f", RepoTags: []string{"telegraf:latest"}, Size: 425484494, SharedSize: 0},
+	Images: client.ImagesDiskUsage{
+		TotalSize: 1e10,
+		Items: []image.Summary{
+			{ID: "sha256:some_imageid", RepoTags: []string{"some_image_tag:1.0.0-alpine"}, Size: 123456789, SharedSize: 0},
+			{ID: "sha256:7f4a1cc74046ce48cd918693cd6bf4b2683f4ce0d7be3f7148a21df9f06f5b5f", RepoTags: []string{"telegraf:latest"}, Size: 425484494, SharedSize: 0},
+		},
 	},
-	Volumes: []*volume.Volume{{Name: "some_volume", UsageData: &volume.UsageData{Size: 123456789}}},
+	Volumes: client.VolumesDiskUsage{
+		Items: []volume.Volume{{Name: "some_volume", UsageData: &volume.UsageData{Size: 123456789}}},
+	},
 }
 
 var version = "1.43"

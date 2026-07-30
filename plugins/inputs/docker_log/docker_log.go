@@ -15,9 +15,9 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/config"
@@ -61,7 +61,7 @@ type DockerLogs struct {
 	labelFilter     filter.Filter
 	containerFilter filter.Filter
 	stateFilter     filter.Filter
-	opts            container.ListOptions
+	opts            client.ContainerListOptions
 	wg              sync.WaitGroup
 	mu              sync.Mutex
 	containerList   map[string]context.CancelFunc
@@ -108,15 +108,15 @@ func (d *DockerLogs) Init() error {
 		return err
 	}
 
-	filterArgs := filters.NewArgs()
+	filterArgs := make(client.Filters)
 	for _, state := range containerStates {
 		if d.stateFilter.Match(state) {
 			filterArgs.Add("status", state)
 		}
 	}
 
-	if filterArgs.Len() != 0 {
-		d.opts = container.ListOptions{
+	if len(filterArgs) != 0 {
+		d.opts = client.ContainerListOptions{
 			Filters: filterArgs,
 		}
 	}
@@ -290,7 +290,7 @@ func (d *DockerLogs) tailContainerLogs(
 		d.lastRecordMtx.Unlock()
 	}
 
-	logOptions := container.LogsOptions{
+	logOptions := client.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Timestamps: true,
