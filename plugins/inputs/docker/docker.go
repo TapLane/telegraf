@@ -16,11 +16,10 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/api/types/system"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/client"
 
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/config"
@@ -96,7 +95,7 @@ type Docker struct {
 	labelFilter     filter.Filter
 	containerFilter filter.Filter
 	stateFilter     filter.Filter
-	objectTypes     []types.DiskUsageObject
+	diskUsage       client.DiskUsageOptions
 
 	// Stats cache for Podman CPU calculation
 	statsCache      map[string]*cachedContainerStats
@@ -124,20 +123,19 @@ func (d *Docker) Init() error {
 		return fmt.Errorf("error validating 'total_include' setting: %w", err)
 	}
 
-	d.objectTypes = make([]types.DiskUsageObject, 0, len(d.StorageObjects))
-
 	for _, object := range d.StorageObjects {
 		switch object {
 		case "container":
-			d.objectTypes = append(d.objectTypes, types.ContainerObject)
+			d.diskUsage.Containers = true
 		case "image":
-			d.objectTypes = append(d.objectTypes, types.ImageObject)
+			d.diskUsage.Images = true
 		case "volume":
-			d.objectTypes = append(d.objectTypes, types.VolumeObject)
+			d.diskUsage.Volumes = true
 		default:
 			d.Log.Warnf("Unrecognized storage object type: %s", object)
 		}
 	}
+	d.diskUsage.Verbose = true
 
 	return nil
 }
@@ -159,7 +157,7 @@ func (d *Docker) Start(telegraf.Accumulator) error {
 	if version.LessThan(minVersion) {
 		d.Log.Warnf("Unsupported api version (%v.%v), upgrade to docker engine 1.12 or later (api version 1.24)",
 			version.Major(), version.Minor())
-	} else if version.LessThan(minDiskUsageVersion) && len(d.objectTypes) > 0 {
+	} else if version.LessThan(minDiskUsageVersion) && len(d.StorageObjects) > 0 {
 		d.Log.Warnf("Unsupported api version for disk usage (%v.%v), upgrade to docker engine 23.0 or later (api version 1.42)",
 			version.Major(), version.Minor())
 	}
@@ -227,7 +225,7 @@ func (d *Docker) Gather(acc telegraf.Accumulator) error {
 		}
 	}
 
-	filterArgs := filters.NewArgs()
+	filterArgs := make(client.Filters)
 	for _, state := range containerStates {
 		if d.stateFilter.Match(state) {
 			filterArgs.Add("status", state)
@@ -235,12 +233,12 @@ func (d *Docker) Gather(acc telegraf.Accumulator) error {
 	}
 
 	// All container states were excluded
-	if filterArgs.Len() == 0 {
+	if len(filterArgs) == 0 {
 		return nil
 	}
 
 	// List containers
-	opts := container.ListOptions{
+	opts := client.ContainerListOptions{
 		Filters: filterArgs,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(d.Timeout))
@@ -268,8 +266,8 @@ func (d *Docker) Gather(acc telegraf.Accumulator) error {
 	wg.Wait()
 
 	// Get disk usage data
-	if len(d.objectTypes) > 0 {
-		d.gatherDiskUsage(acc, types.DiskUsageOptions{Types: d.objectTypes})
+	if len(d.StorageObjects) > 0 {
+		d.gatherDiskUsage(acc, d.diskUsage)
 	}
 
 	// Clean up stale cache entries for Podman
@@ -284,7 +282,7 @@ func (d *Docker) gatherSwarmInfo(acc telegraf.Accumulator) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(d.Timeout))
 	defer cancel()
 
-	services, err := d.client.ServiceList(ctx, swarm.ServiceListOptions{})
+	services, err := d.client.ServiceList(ctx, client.ServiceListOptions{})
 	if errors.Is(err, context.DeadlineExceeded) {
 		return errServiceTimeout
 	}
@@ -293,12 +291,12 @@ func (d *Docker) gatherSwarmInfo(acc telegraf.Accumulator) error {
 	}
 
 	if len(services) > 0 {
-		tasks, err := d.client.TaskList(ctx, swarm.TaskListOptions{})
+		tasks, err := d.client.TaskList(ctx, client.TaskListOptions{})
 		if err != nil {
 			return err
 		}
 
-		nodes, err := d.client.NodeList(ctx, swarm.NodeListOptions{})
+		nodes, err := d.client.NodeList(ctx, client.NodeListOptions{})
 		if err != nil {
 			return err
 		}
@@ -548,13 +546,17 @@ func (d *Docker) gatherContainer(
 	}
 	defer r.Body.Close()
 
-	daemonOSType := r.OSType
 	dec := json.NewDecoder(r.Body)
 	if err = dec.Decode(&v); err != nil {
 		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		return fmt.Errorf("error decoding: %w", err)
+	}
+
+	var daemonOSType string
+	if v != nil {
+		daemonOSType = v.OSType
 	}
 
 	// For Podman, fix the CPU stats using cache if available
@@ -604,7 +606,7 @@ func (d *Docker) gatherContainerInspect(
 	}
 
 	if info.State != nil {
-		tags["container_status"] = info.State.Status
+		tags["container_status"] = string(info.State.Status)
 		statefields := map[string]interface{}{
 			"oomkilled":     info.State.OOMKilled,
 			"pid":           info.State.Pid,
@@ -636,8 +638,8 @@ func (d *Docker) gatherContainerInspect(
 
 		if info.State.Health != nil {
 			healthfields := map[string]interface{}{
-				"health_status":  info.State.Health.Status,
-				"failing_streak": info.ContainerJSONBase.State.Health.FailingStreak,
+				"health_status":  string(info.State.Health.Status),
+				"failing_streak": info.State.Health.FailingStreak,
 			}
 			acc.AddFields("docker_container_health", healthfields, tags, now())
 		}
@@ -939,7 +941,7 @@ func (d *Docker) gatherBlockIOMetrics(
 	}
 }
 
-func (d *Docker) gatherDiskUsage(acc telegraf.Accumulator, opts types.DiskUsageOptions) {
+func (d *Docker) gatherDiskUsage(acc telegraf.Accumulator, opts client.DiskUsageOptions) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(d.Timeout))
 	defer cancel()
 
@@ -954,7 +956,7 @@ func (d *Docker) gatherDiskUsage(acc telegraf.Accumulator, opts types.DiskUsageO
 
 	// Layers size
 	fields := map[string]interface{}{
-		"layers_size": du.LayersSize,
+		"layers_size": du.Images.TotalSize,
 	}
 
 	tags := map[string]string{
@@ -965,7 +967,7 @@ func (d *Docker) gatherDiskUsage(acc telegraf.Accumulator, opts types.DiskUsageO
 	acc.AddFields(duName, fields, tags, now)
 
 	// Containers
-	for _, cntnr := range du.Containers {
+	for _, cntnr := range du.Containers.Items {
 		fields := map[string]interface{}{
 			"size_rw":      cntnr.SizeRw,
 			"size_root_fs": cntnr.SizeRootFs,
@@ -989,7 +991,7 @@ func (d *Docker) gatherDiskUsage(acc telegraf.Accumulator, opts types.DiskUsageO
 	}
 
 	// Images
-	for _, image := range du.Images {
+	for _, image := range du.Images.Items {
 		fields := map[string]interface{}{
 			"size":        image.Size,
 			"shared_size": image.SharedSize,
@@ -1011,7 +1013,7 @@ func (d *Docker) gatherDiskUsage(acc telegraf.Accumulator, opts types.DiskUsageO
 	}
 
 	// Volumes
-	for _, volume := range du.Volumes {
+	for _, volume := range du.Volumes.Items {
 		fields := map[string]interface{}{
 			"size": volume.UsageData.Size,
 		}
