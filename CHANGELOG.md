@@ -12,6 +12,7 @@
 
 ### Dependency Updates
 
+- `deps` Bump github.com/prometheus/prometheus from 0.308.1 to 0.311.3 (GHSA-8rm2-7qqf-34qm / CVE-2026-42154)
 - [#18125](https://github.com/influxdata/telegraf/pull/18125) `deps` Bump cloud.google.com/go/auth from 0.17.0 to 0.18.0
 - [#18140](https://github.com/influxdata/telegraf/pull/18140) `deps` Bump cloud.google.com/go/auth from 0.17.0 to 0.18.0
 - [#18094](https://github.com/influxdata/telegraf/pull/18094) `deps` Bump cloud.google.com/go/storage from 1.57.2 to 1.58.0
